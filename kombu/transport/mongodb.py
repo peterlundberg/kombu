@@ -11,7 +11,7 @@ MongoDB transport.
 from __future__ import absolute_import
 
 from Queue import Empty
-
+from bson.son import SON
 import pymongo
 from pymongo import errors
 from anyjson import loads, dumps
@@ -33,9 +33,11 @@ class Channel(virtual.Channel):
 
     def _get(self, queue):
         try:
+            sort = SON(priority=pymongo.ASCENDING)
+            sort['_id'] = pymongo.ASCENDING
             msg = self.client.database.command("findandmodify", "messages",
                     query={"queue": queue},
-                    sort={"_id": pymongo.ASCENDING}, remove=True)
+                    sort=sort, remove=True)
         except errors.OperationFailure, exc:
             if "No matching object found" in exc.args[0]:
                 raise Empty()
@@ -49,7 +51,8 @@ class Channel(virtual.Channel):
         return self.client.find({"queue": queue}).count()
 
     def _put(self, queue, message, **kwargs):
-        self.client.insert({"payload": dumps(message), "queue": queue})
+        priority = message.get('properties', {}).get('delivery_info', {}).get('priority', 5)
+        self.client.insert({"payload": dumps(message), "queue": queue, "priority": priority})
 
     def _purge(self, queue):
         size = self._size(queue)
@@ -76,7 +79,9 @@ class Channel(virtual.Channel):
         if conninfo.userid:
             database.authenticate(conninfo.userid, conninfo.password)
         col = database.messages
-        col.ensure_index([("queue", 1)])
+        #note, for existing installation one should drop the index on only queue
+        col.ensure_index([("queue", pymongo.ASCENDING), ("priority", pymongo.ASCENDING), ("_id", pymongo.ASCENDING)])
+
         return col
 
     @property
